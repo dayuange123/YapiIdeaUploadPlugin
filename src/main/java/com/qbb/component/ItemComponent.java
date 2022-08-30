@@ -2,6 +2,7 @@ package com.qbb.component;
 
 import com.intellij.util.ui.JBUI;
 import com.qbb.dto.ConfigDTO;
+import com.qbb.model.ProjectTypeEnum;
 import sun.swing.DefaultLookup;
 
 import javax.swing.*;
@@ -75,7 +76,7 @@ public class ItemComponent extends JPanel implements ListCellRenderer<ConfigDTO>
         projectIdJLabel.setAlignmentY(projectIdJLabel.LEFT_ALIGNMENT);
 
         projectTypeJLabel = new JLabel("项目类型:");
-        String[] select = {"api", "dubbo"};
+        String[] select = ProjectTypeEnum.getAllType();
         projectTypeComboBox = new JComboBox();
         projectTypeComboBox.setModel(new DefaultComboBoxModel(select));
         projectTypeComboBox.setSelectedItem("api");
