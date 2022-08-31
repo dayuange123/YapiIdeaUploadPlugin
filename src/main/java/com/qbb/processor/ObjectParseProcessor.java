@@ -80,15 +80,14 @@ public class ObjectParseProcessor {
 	}
 
 	public static KV<String, Object> getPojoJson(Project project, PsiType psiType) throws RuntimeException {
+
 		KV<String, Object> result = new KV<>();
-		if (psiType instanceof PsiPrimitiveType) {
-			//如果是基本类型
-			result.set("type", psiType.getPresentableText());
-			result.set("title", "基本类型");
-		} else if (NormalTypes.isNormalType(psiType.getPresentableText())) {
-			//如果是包装类型
-			result.set("type", psiType.getPresentableText());
-			result.set("title", "包装");
+		if (psiType instanceof PsiPrimitiveType || NormalTypes.isNormalType(psiType.getPresentableText())) {
+			//如果是基本类型			//如果是包装类型
+			result.set(FieldParser.parsePsiPrimitiveType(psiType.getPresentableText(), ""));
+		} else if (psiType instanceof PsiArrayType) {
+			//array type
+			result.set(parseJavaArray(project, new HashSet<>(), psiType, ""));
 		}
 		//如果是数组
 		else if (TypeCheckUtil.isJavaCollection(psiType, project)) {
@@ -96,12 +95,10 @@ public class ObjectParseProcessor {
 			String childPackage = types[1].split(">")[0];
 			result.set("items", parseMapOrCollectionGenericType(childPackage, project, new HashSet<>()));
 			result.set("type", "array");
-			result.set("title", "数组");
 		}
 		//如果是map类型
 		else if (TypeCheckUtil.isJavaMap(psiType, project)) {
 			result.set(KV.by("type", "object"));
-			result.set(KV.by("title", "该参数是一个map"));
 			if (((PsiClassReferenceType) psiType).getParameters().length > 1) {
 				String keyCanonicalText = ((PsiClassReferenceType) psiType).getParameters()[0].getCanonicalText();
 				String valCanonicalText = ((PsiClassReferenceType) psiType).getParameters()[1].getCanonicalText();
@@ -109,29 +106,22 @@ public class ObjectParseProcessor {
 				keyObjSup.set("mapKey", parseMapOrCollectionGenericType(keyCanonicalText, project, new HashSet<>()));
 				keyObjSup.set("mapValue", parseMapOrCollectionGenericType(valCanonicalText, project, new HashSet<>()));
 				result.set("properties", keyObjSup);
-			} else {
-				result.set(KV.by("title", "请完善Map<?,?>"));
 			}
 		} else {
 			String[] types = psiType.getCanonicalText().split("<");
+			KV<String, Object> kvObject;
+			List<String> requiredList = new ArrayList<>();
 			if (types.length > 1) {
 				//如果带范型
 				PsiClass psiClassChild = JavaPsiFacade.getInstance(project).findClass(types[0], GlobalSearchScope.allScope(project));
-				List<String> requiredList = new ArrayList<>();
-				KV<String, Object> kvObject = getFields(psiClassChild, project, types, 1, requiredList, new HashSet<>());
-				result.set("type", "object");
-				result.set("title", psiType.getPresentableText());
-				result.set("required", requiredList);
-				result.set("properties", kvObject);
+				kvObject = getFields(psiClassChild, project, types, 1, requiredList, new HashSet<>());
 			} else {
 				PsiClass psiClassChild = JavaPsiFacade.getInstance(project).findClass(psiType.getCanonicalText(), GlobalSearchScope.allScope(project));
-				List<String> requiredList = new ArrayList<>();
-				KV<String, Object> kvObject = getFields(psiClassChild, project, null, null, requiredList, new HashSet<>());
-				result.set("type", "object");
-				result.set("required", requiredList);
-				result.set("title", psiType.getPresentableText());
-				result.set("properties", kvObject);
+				kvObject = getFields(psiClassChild, project, null, null, requiredList, new HashSet<>());
 			}
+			result.set("type", "object");
+			result.set("required", requiredList);
+			result.set("properties", kvObject);
 		}
 		return result;
 	}
@@ -154,30 +144,58 @@ public class ObjectParseProcessor {
 		if (psiClass == null) {
 			return kv;
 		}
+		//泛型类型 需要从最开始的泛型数组取出来对应的类型，这里不支持多级泛型
 		if (NormalTypes.genericList.contains(psiClass.getName()) && childType != null && childType.length > index) {
 			String child = childType[index].split(">")[0];
 			PsiClass psiClassChild = JavaPsiFacade.getInstance(project).findClass(child, GlobalSearchScope.allScope(project));
 			return getFields(psiClassChild, project, childType, index + 1, requiredList, pNames);
-		} else {
-			for (PsiField field : psiClass.getAllFields()) {
-				if (Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.Deprecate))) {
-					continue;
-				}
-				//如果是有notnull 和 notEmpty 注解就加入必填
-				if (Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotNull))
-						|| Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotEmpty))
-						|| Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotBlank))) {
-					requiredList.add(field.getName());
-				}
-				Set<String> pNameList = new HashSet<>(pNames);
-				pNameList.add(psiClass.getName());
-				getField(field, project, kv, childType, index, pNameList);
-			}
 		}
 
+		for (PsiField field : psiClass.getAllFields()) {
+			if (Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.Deprecate))) {
+				continue;
+			}
+			//如果是有notnull 和 notEmpty 注解就加入必填
+			if (Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotNull))
+					|| Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotEmpty))
+					|| Objects.nonNull(PsiAnnotationSearchUtil.findAnnotation(field, JavaConstant.NotBlank))) {
+				requiredList.add(field.getName());
+			}
+			Set<String> pNameList = new HashSet<>(pNames);
+			pNameList.add(psiClass.getName());
+			getField(field, project, kv, childType, index, pNameList);
+		}
 		return kv;
 	}
 
+
+	private static KV<String, Object> parseJavaArray(Project project, Set<String> pNames, PsiType type, String remark) {
+		PsiType deepType = type.getDeepComponentType();
+		KV<String, Object> kvlist = new KV<>();
+		String deepTypeName = deepType.getPresentableText();
+		if (deepType instanceof PsiPrimitiveType) {
+			kvlist.set("type", type.getPresentableText());
+		} else if (NormalTypes.isNormalType(deepTypeName)) {
+			kvlist.set("type", CommonUtil.javaType2JsonType(deepTypeName));
+		} else {
+			kvlist.set(KV.by("type", "object"));
+			PsiClass psiClass = PsiUtil.resolveClassInType(deepType);
+			if (Objects.nonNull(psiClass)) {
+				if (!pNames.contains(psiClass.getName())) {
+					List<String> requiredList = new ArrayList<>();
+					kvlist.set("properties", getFields(psiClass, project, null, null, requiredList, pNames));
+					kvlist.set("required", requiredList);
+				} else {
+					kvlist.set(KV.by("type", psiClass.getName()));
+				}
+			}
+		}
+		KV<String, Object> kv1 = new KV<>();
+		kv1.set(KV.by("type", "array"));
+		kv1.set(KV.by("description", remark));
+		kv1.set("items", kvlist);
+		return kv1;
+	}
 
 	public static void getField(PsiField field, Project project, KV<String, Object> kv, String[] childType, Integer index, Set<String> pNames) {
 		if (field.getModifierList().hasModifierProperty("final")) {
@@ -206,10 +224,11 @@ public class ObjectParseProcessor {
 				return;
 			}
 			KV<String, Object> kv1 = new KV<>();
+			kv1.set(KV.by("description", Strings.isNullOrEmpty(remark) ? name : remark));
+
 			String child = childType[index].split(">")[0];
 			if ("?".equals(child)) {
 				kv1.set(KV.by("type", "?"));
-				kv1.set(KV.by("description", Strings.isNullOrEmpty(remark) ? name : remark));
 				kv1.set(KV.by("mock", NormalTypes.formatMockType("?", "?")));
 			} else if (NormalTypes.isNormalType(child) || NormalTypes.noramlTypesPackages.containsKey(child)) {
 				PsiClass psiClassChild = JavaPsiFacade.getInstance(project).findClass(child, GlobalSearchScope.allScope(project));
@@ -225,10 +244,8 @@ public class ObjectParseProcessor {
 				}
 				kv1.set("items", parseMapOrCollectionGenericType(listType, project, pNames));
 				kv1.set("type", "array");
-				kv1.set("title", "数组");
 			} else if (TypeCheckUtil.isJavaMap(child, project)) {
 				kv1.set(KV.by("type", "object"));
-				kv1.set(KV.by("title", "该参数是一个map"));
 				String keyType = null;
 				String valType = null;
 				if (childType.length > index + 1) {
@@ -243,14 +260,11 @@ public class ObjectParseProcessor {
 					keyObjSup.set("mapKey", parseMapOrCollectionGenericType(keyType, project, new HashSet<>()));
 					keyObjSup.set("mapValue", parseMapOrCollectionGenericType(valType, project, new HashSet<>()));
 					kv1.set("properties", keyObjSup);
-				} else {
-					kv1.set(KV.by("title", "请完善Map<?,?>"));
 				}
 			} else {
 				//class type
 				kv1.set(KV.by("type", "object"));
 				PsiClass psiClassChild = JavaPsiFacade.getInstance(project).findClass(child, GlobalSearchScope.allScope(project));
-				kv1.set(KV.by("description", Strings.isNullOrEmpty(remark) ? name : remark));
 				if (!pNames.contains(psiClassChild.getName())) {
 					List<String> requiredList = new ArrayList<>();
 					kv1.set(KV.by("properties", getFields(psiClassChild, project, childType, index + 1, requiredList, pNames)));
@@ -260,37 +274,12 @@ public class ObjectParseProcessor {
 				}
 			}
 			kv.set(name, kv1);
-
 			return;
 		}
 
 		if (type instanceof PsiArrayType) {
 			//array type
-			PsiType deepType = type.getDeepComponentType();
-			KV<String, Object> kvlist = new KV<>();
-			String deepTypeName = deepType.getPresentableText();
-			if (deepType instanceof PsiPrimitiveType) {
-				kvlist.set("type", type.getPresentableText());
-			} else if (NormalTypes.isNormalType(deepTypeName)) {
-				kvlist.set("type", CommonUtil.javaType2JsonType(deepTypeName));
-			} else {
-				kvlist.set(KV.by("type", "object"));
-				PsiClass psiClass = PsiUtil.resolveClassInType(deepType);
-				if (Objects.nonNull(psiClass)) {
-					if (!pNames.contains(psiClass.getName())) {
-						List<String> requiredList = new ArrayList<>();
-						kvlist.set("properties", getFields(psiClass, project, null, null, requiredList, pNames));
-						kvlist.set("required", requiredList);
-					} else {
-						kvlist.set(KV.by("type", psiClass.getName()));
-					}
-				}
-			}
-			KV<String, Object> kv1 = new KV<>();
-			kv1.set(KV.by("type", "array"));
-			kv1.set(KV.by("description", remark));
-			kv1.set("items", kvlist);
-			kv.set(name, kv1);
+			kv.set(name, parseJavaArray(project, pNames, type, remark));
 			return;
 		}
 		if (TypeCheckUtil.isJavaCollection(type, project)) {
@@ -309,7 +298,7 @@ public class ObjectParseProcessor {
 			//Map类型
 			KV<String, Object> kv1 = new KV<>();
 			kv1.set(KV.by("type", "object"));
-			kv1.set(KV.by("description", remark + "该参数为map"));
+			kv1.set(KV.by("description", remark));
 			if (((PsiClassReferenceType) type).getParameters().length > 1) {
 				String keyCanonicalText = ((PsiClassReferenceType) type).getParameters()[0].getCanonicalText();
 				String valCanonicalText = ((PsiClassReferenceType) type).getParameters()[1].getCanonicalText();
