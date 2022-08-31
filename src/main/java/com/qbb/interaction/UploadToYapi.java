@@ -36,11 +36,14 @@ public class UploadToYapi extends AnAction {
 	private static final MoaProjectProcessor MOA_PROJECT_PROCESSOR = new MoaProjectProcessor();
 
 
+
+
 	private ConfigDTO getConfigDTO(AnActionEvent e, Project project) {
 		try {
 			List<ConfigDTO> configs = ServiceManager.getService(ConfigPersistence.class).getConfigs();
 			if (configs == null || configs.size() == 0) {
-				Messages.showErrorDialog("请先去配置界面配置yapi配置", "获取配置失败！");
+				// TODO: 2022/8/31
+				//	Messages.showErrorDialog("请先去配置界面配置yapi配置", "获取配置失败！");
 				return null;
 			}
 			PsiFile psiFile = e.getDataContext().getData(CommonDataKeys.PSI_FILE);
@@ -78,7 +81,11 @@ public class UploadToYapi extends AnAction {
 		// 获取配置
 		ConfigDTO configDTO = getConfigDTO(e, project);
 		if (Objects.isNull(configDTO)) {
-			return;
+			configDTO=new ConfigDTO();
+			configDTO.setProjectId("14");
+			configDTO.setYapiUrl("http://127.0.0.1:3000");
+			configDTO.setProjectToken("139feff05de281481915eae10ab16059b21cf0ba44b8d73220a1242836b30f8a");
+			configDTO.setProjectType(ProjectTypeEnum.MOA.getName());
 		}
 
 		// 判断项目类型
